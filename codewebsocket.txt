@@ -1,0 +1,110 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiMulti.h>
+#include <WebSocketsClient.h>
+#include <SPI.h>
+#include <LoRa.h>
+
+// Khởi tạo đối tượng WiFiMulti
+WiFiMulti wifiMulti;
+
+// Định nghĩa chân LoRa và output
+#define SS 5
+#define RST 14
+#define DIO0 2
+#define OUTPUT_PIN_ID1 25
+#define OUTPUT_PIN_ID2 26
+
+// WiFi credentials
+const char *ssid = "Xiaomi 13";
+const char *pass = "123456788";
+
+// WebSocket client
+WebSocketsClient webSocket;
+
+// Hàm xử lý sự kiện từ WebSocket
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.println("✅ WebSocket connected!");
+      break;
+    case WStype_DISCONNECTED:
+      Serial.println("❌ WebSocket disconnected!");
+      break;
+    case WStype_TEXT:
+      Serial.printf("💬 WebSocket message: %s\n", payload);
+      break;
+    default:
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Boot delay
+  for (uint8_t t = 4; t > 0; t--) {
+    Serial.printf("[SETUP] BOOT WAIT %d...\n", t);
+    Serial.flush();
+    delay(1000);
+  }
+
+  // Kết nối WiFi
+  wifiMulti.addAP(ssid, pass);
+  while (wifiMulti.run() != WL_CONNECTED) {
+    delay(100);
+  }
+  Serial.println("📶 WiFi connected!");
+  Serial.println("IP Address: " + WiFi.localIP().toString());
+
+  // Khởi tạo LoRa
+  SPI.begin();
+  LoRa.setPins(SS, RST, DIO0);
+  if (!LoRa.begin(433E6)) {
+    Serial.println("❌ LoRa init failed!");
+    while (1);
+  }
+  Serial.println("📡 LoRa Receiver started!");
+
+  // Khởi tạo các chân output
+  pinMode(OUTPUT_PIN_ID1, OUTPUT);
+  pinMode(OUTPUT_PIN_ID2, OUTPUT);
+  digitalWrite(OUTPUT_PIN_ID1, HIGH);
+  digitalWrite(OUTPUT_PIN_ID2, HIGH);
+
+  // Cấu hình WebSocket (host, port, path)
+  webSocket.begin("192.168.19.124", 5000, "/");  // host, port, path
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);  // Tự động reconnect mỗi 5s nếu disconnect
+}
+
+void loop() {
+  webSocket.loop(); // Luôn cần gọi để duy trì kết nối
+
+  // Nhận dữ liệu từ LoRa
+  int packetSize = LoRa.parsePacket();
+  if (packetSize) {
+    String receivedText = "";
+    while (LoRa.available()) {
+      receivedText += (char)LoRa.read();
+    }
+
+    Serial.println("------ Received from LoRa ------");
+    Serial.println(receivedText);
+    Serial.println("--------------------------------");
+
+    if (receivedText.indexOf("ID1") != -1) {
+      Serial.println("📡 Data from ID1:");
+      digitalWrite(OUTPUT_PIN_ID1, LOW);
+      webSocket.sendTXT(receivedText.c_str());
+      delay(100);  // Tạm delay ngắn tránh chập chờn
+      digitalWrite(OUTPUT_PIN_ID1, HIGH);
+    } else if (receivedText.indexOf("ID2") != -1) {
+      Serial.println("📡 Data from ID2:");
+      digitalWrite(OUTPUT_PIN_ID2, LOW);
+      webSocket.sendTXT(receivedText.c_str());
+      delay(100);
+      digitalWrite(OUTPUT_PIN_ID2, HIGH);
+    }
+  }
+}
